@@ -13,6 +13,10 @@ import numpy as np
 import time
 import sys
 import json
+import threading
+
+lock = threading.Lock()
+lock_dict = dict()
 
 def process(op, db):
     if type(op) == type(dict()):
@@ -50,17 +54,31 @@ def initializeDB(db):
 def txn(txn_num, op_num, allUIDs):
     txn_processing_time = 0
     for i in range(int(txn_num)):
+        txn_idns = list()
+        locked_idns = set()
+        choice_list = list()
+
         for j in range(int(op_num)):
             c = choice(['read', 'write'])
-            if c == 'read':
-                idn = str(choice(allUIDs))
+            choice_list.append(c)
+            idn = str(choice(allUIDs)) if c == 'read' else str(uuid.uuid4())
+            txn_idns.append(idn)
+
+            if idn not in lock_dict:
+                lock_dict[idn] = threading.Lock()
+            if idn not in locked_idns:
+                locked_idns.add(idn)
+                lock_dict[idn].acquire()
+
+        for j in range(int(op_num)):
+            idn = txn_idns[j]
+            if choice_list[j] == 'read':
                 t1 = time.time()
                 process(idn, db)
                 t2 = time.time()
                 txn_processing_time += (t2 - t1)
 
-            elif c == 'write':
-                idn = str(uuid.uuid4())
+            elif choice_list[j] == 'write':
                 data = {idn:{'name': get_random_string(), 'age': get_age()}}
 
                 allUIDs = np.append(allUIDs, [idn])
@@ -69,6 +87,10 @@ def txn(txn_num, op_num, allUIDs):
                 process(data, db)
                 t2 = time.time()
                 txn_processing_time += (t2 - t1)
+
+    for idn in locked_idns:
+        lock_dict[idn].release()
+
     return txn_processing_time
 
 # def final_txn():
@@ -81,17 +103,19 @@ def edge(db, yolo, lower_theta, upper_theta, lookfor):
     # SEND A FIRST PACKET WITH LT, UT, SIZE, LOOKFOR
     times = list()
     allCorners = list()
+    allConf = list()
+
     cwd = os.getcwd()
     allUIDs = np.load(os.path.join(cwd,'allUIDs.npy'))
 
     host_edge =  '172.31.21.233' # edge private ipv4
-    port_edge = 8082
+    port_edge = 8081
     s_edge = socket.socket()
     s_edge.bind((host_edge, port_edge))
 
     #####################################
-    host_cloud =  '3.236.113.252'  # cloud public ipv4 address
-    port_cloud = 8085
+    host_cloud =  '3.235.22.185'  # cloud public ipv4 address
+    port_cloud = 8084
 
     s_cloud = socket.socket()
     s_cloud.connect((host_cloud, port_cloud))
@@ -125,31 +149,36 @@ def edge(db, yolo, lower_theta, upper_theta, lookfor):
                     continue
             elif len(frame) == 0:
                 client_socket.close()
+
+            time_after_frame_recv = time.time()
 #        try:
 #            f = pickle.loads(frame)
 #            time_after_frame_recv = time.time()
 #        except:
 #            frameisnotdone = True
 #            continue
+
+
         total_frames_count += 1
         frameisnotdone = True
         frame = bytearray()
 
         time_before_detect = time.time()
         result = detect(f, yolo, lower_theta, lookfor)
-
         time_after_detect = time.time()
+        print(result)
 
         #  INITIAL TRANSACTION
-        txn_time_i = txn(1,1, allUIDs)
+        txn_time_i = txn(1,6, allUIDs)
 
         time_after_txn = time.time()
         N = 180
-        edge = 0 # edge = zeros, N-edge aka clouds =  ones
+        edge = 90 # edge = zeros, N-edge aka clouds =  ones
         cloud_choice = np.array([0] * edge + [1] * (N-edge))
         np.random.shuffle(cloud_choice)
         print(cloud_choice[total_frames_count - 1])
-        if cloud_choice[total_frames_count - 1]: # go2Cloud(result, lookfor, upper_theta):
+
+        if go2Cloud(result, lookfor, upper_theta): # cloud_choice[total_frames_count - 1]: # go2Cloud(result, lookfor, upper_theta):
             time_before_going2cloud = time.time()
             went_to_cloud += 1
             s_cloud.send(pickle.dumps(f))
@@ -167,6 +196,12 @@ def edge(db, yolo, lower_theta, upper_theta, lookfor):
         time_after_txn2 = time.time()
         print('total frames so far', total_frames_count)
 
+        # =============================================================
+        # The result confidence distribution
+        allConf.extend(result['confidences'])
+        np.save('allConfidence', allConf)
+        # =============================================================
+
         corners = getCornersList(result)
         allCorners.extend([corners])
         np.save('allCorners-croesus', allCorners)
@@ -174,7 +209,7 @@ def edge(db, yolo, lower_theta, upper_theta, lookfor):
         d = pickle.dumps(result)
         client_socket.send(d)
         print("done")
-        if cloud_choice[total_frames_count - 1]: # go2Cloud(result, lookfor, upper_theta):
+        if go2Cloud(result, lookfor, upper_theta): # cloud_choice[total_frames_count - 1]: # go2Cloud(result, lookfor, upper_theta):
             times.append([time_after_frame_recv - time_before_frame_recv, time_after_detect -  time_before_detect, txn_time_i,time_after_cloud - time_before_going2cloud , txn_time_j ])
         else:
             times.append([time_after_frame_recv - time_before_frame_recv, time_after_detect -  time_before_detect, txn_time_i ,0, txn_time_j])
@@ -186,9 +221,13 @@ def edge(db, yolo, lower_theta, upper_theta, lookfor):
 if __name__ == '__main__':
     db = pickledb.load('MyDB.db', True)
     initializeDB(db)
-    lower_theta = 0.5 # don't trust predictions with less confidence
-    upper_theta = 0.6 # validate predictions under this confidence
+    lower_theta = 0.6 # don't trust predictions with less confidence
+    upper_theta = 0.7 # validate predictions under this confidence
 
-    lookfor = 0 #car
-    yolo = load_model('yolov3-tiny')
-    edge(db, yolo, lower_theta, upper_theta, lookfor)
+    lookfor = 5 #car
+
+    yolo = load_model('yolov3-tiny') # -tiny')
+    thread1 = threading.Thread(target = edge, args = (db, yolo, lower_theta, upper_theta, lookfor))
+    thread1.start()
+    thread1.join()
+    # edge(db, yolo, lower_theta, upper_theta, lookfor)
