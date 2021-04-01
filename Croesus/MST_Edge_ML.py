@@ -15,7 +15,6 @@ import sys
 import json
 import threading
 
-lock = threading.Lock()
 lock_dict = dict()
 
 def process(op, db):
