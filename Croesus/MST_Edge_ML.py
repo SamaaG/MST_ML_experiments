@@ -190,7 +190,7 @@ def edge(db, yolo, lower_theta, upper_theta, lookfor):
 
         time_after_backfrom_cloud = time.time()
         # FINAL TRANSACTION
-        txn_time_j = txn(1,1, allUIDs)
+        txn_time_j = txn(1,6, allUIDs)
 
         time_after_txn2 = time.time()
         print('total frames so far', total_frames_count)
