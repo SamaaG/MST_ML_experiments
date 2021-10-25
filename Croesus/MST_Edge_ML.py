@@ -67,7 +67,8 @@ def txn(txn_num, op_num, allUIDs):
                 lock_dict[idn] = threading.Lock()
             if idn not in locked_idns:
                 locked_idns.add(idn)
-                lock_dict[idn].acquire()
+                # if I am in the final section, check that I am not trying to re-lock a lock I already held in the initial section
+                lock_dict[idn].acquire() 
 
         for j in range(int(op_num)):
             idn = txn_idns[j]
@@ -89,6 +90,8 @@ def txn(txn_num, op_num, allUIDs):
 
     for idn in locked_idns:
         lock_dict[idn].release()
+    # if initial section: (1) dont release locks (2) record locks so that the final transaction can see it
+    # if final section: (1) release the final section locks (2) look up the initial locks and release them
 
     return txn_processing_time
 
